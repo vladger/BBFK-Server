@@ -1,3 +1,4 @@
+## Notice: this project was built using AI (Gemini Hydrogen).
 # Bubble Bobble for Kakao — Custom Preservation Server
 
 A zero-dependency Python 3 mock server for the shut-down Unity mobile game **Bubble Bobble for Kakao** (`버블보블 for Kakao`), reverse-engineered from its decompiled client source (`BBFK_sourcecode`).
