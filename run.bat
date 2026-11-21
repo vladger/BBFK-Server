@@ -1,0 +1,1 @@
+bbfk_server.py --host 0.0.0.0 --port 8080 --public-host http://192.168.0.71:8080
