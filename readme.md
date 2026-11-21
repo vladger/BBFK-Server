@@ -61,7 +61,7 @@ Because the original KakaoTalk auth servers and CDN AssetBundles are offline, th
 4. **Missing Character Spine AssetBundle Workaround (`Game.EndStateLoad`, `Game.getBubblenTextureName`, `Game.getBubbleTextureName`)**:
    - The original `Bubblen1_1.unity3d.and` Spine AssetBundle is not included in the APK. Passing `isSpine: false` to `Player.Create(...)` in `Game.EndStateLoad()`, returning a bundled 2D sprite sheet (such as `root/game/enemy/zenchan`) in `Game.getBubblenTextureName()`, and remapping `root/game/bubble0` to `root/game/bubble1` in `Game.getBubbleTextureName()` allows the player and bubbles to render in-game.
 
-You can use the automatic patcher (patch_apk.py), change parameters in its bat launcher file.
+### You can use the automatic patcher (patch_apk.py), change parameters in its bat launcher file. The APK is unsigned, sign it before installing and use ADB --bypass-low-target-sdk-block or "Install With Options" to install on modern Android versions.
 ---
 
 ## Protocol Overview
