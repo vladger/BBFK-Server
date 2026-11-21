@@ -56,11 +56,12 @@ Because the original KakaoTalk auth servers and CDN AssetBundles are offline, th
    - Keep `Global.SysDef.isUseLocalResouce()` returning `false` so the client downloads `.bin` levels and map PNGs from the server.
 2. **Enable Guest Login (`Global.SysDef.GetAndroid_GuestMode`)**:
    - Return `true` so the Guest Login button appears on the title screen and bypasses KakaoTalk authentication.
-3. **Allow Cleartext HTTP on Android 9+ (`AndroidManifest.xml`)**:
+3. **(Optional) Allow Cleartext HTTP on Android 9+ (`AndroidManifest.xml`)**:
    - Set `android:usesCleartextTraffic="true"` on `<application>` so Unity's `WWW` downloader can fetch `/resource/` files over `http://`.
 4. **Missing Character Spine AssetBundle Workaround (`Game.EndStateLoad`, `Game.getBubblenTextureName`, `Game.getBubbleTextureName`)**:
    - The original `Bubblen1_1.unity3d.and` Spine AssetBundle is not included in the APK. Passing `isSpine: false` to `Player.Create(...)` in `Game.EndStateLoad()`, returning a bundled 2D sprite sheet (such as `root/game/enemy/zenchan`) in `Game.getBubblenTextureName()`, and remapping `root/game/bubble0` to `root/game/bubble1` in `Game.getBubbleTextureName()` allows the player and bubbles to render in-game.
 
+You can use the automatic patcher (patch_apk.py), change parameters in its bat launcher file.
 ---
 
 ## Protocol Overview
