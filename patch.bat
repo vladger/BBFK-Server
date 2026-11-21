@@ -1,1 +1,1 @@
-python3 patch_apk.py BBFK.apk 192.168.0.71:8080 -o BBFK_patched.apk
+python patch_apk.py BBFK.apk 192.168.0.71:8080 -o BBFK_patched.apk
