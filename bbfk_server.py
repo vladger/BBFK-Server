@@ -21,6 +21,7 @@ Usage:
 
 import argparse
 import base64
+import glob
 import json
 import math
 import os
@@ -533,6 +534,177 @@ def build_sample_episode_bin(episode_bin_name: str, dungeon_count: int = 10, map
     return binary_converter_encrypt(bytes(ep_msg))
 
 
+
+def _build_map_data_from_dict(m: dict) -> bytes:
+    """Serializes a custom JSON map section dict into SerializeMapData protobuf bytes."""
+    width, height = 32, 34
+    tile_set = set()
+    for t in m.get("tiles", []):
+        if isinstance(t, (list, tuple)) and len(t) >= 2:
+            tile_set.add((int(t[0]), int(t[1])))
+        elif isinstance(t, dict):
+            tile_set.add((int(t.get("x", 0)), int(t.get("y", 0))))
+
+    tip_msgs = []
+    air_ints = []
+    for y in range(height):
+        for x in range(width):
+            if (x, y) in tile_set:
+                tip_msgs.append(_pb_int(1, 0) + _pb_int(2, 0))
+                air_ints.append(1)
+            else:
+                tip_msgs.append(_pb_int(1, -1) + _pb_int(2, -1))
+                air_ints.append(0)
+
+    players = list(m.get("players", []))
+    if len(players) == 0:
+        players = [{"id": 1, "x": 5.0, "y": 30.0, "dir": 1}, {"id": 2, "x": 7.0, "y": 30.0, "dir": 1}]
+    elif len(players) == 1:
+        p0 = players[0]
+        players.append({"id": 2, "x": float(p0.get("x", 5.0)) + 2.0, "y": float(p0.get("y", 30.0)), "dir": int(p0.get("dir", 1))})
+
+    enemies = m.get("enemies", [])
+    items = m.get("items", [])
+    holes = m.get("holes", [])
+
+    map_msg = bytearray()
+    map_msg += _pb_bytes(1, _pb_header("map"))
+    map_msg += _pb_int(2, width)
+    map_msg += _pb_int(3, height)
+    map_msg += _pb_bytes(4, _pb_header("tip"))
+    for tm in tip_msgs:
+        map_msg += _pb_bytes(5, tm)
+    map_msg += _pb_bytes(6, _pb_header("air"))
+    for a in air_ints:
+        map_msg += _pb_int(7, a)
+
+    map_msg += _pb_bytes(8, _pb_header("enemy"))
+    map_msg += _pb_int(9, len(enemies))
+    for em in enemies:
+        eb = (
+            _pb_int(1, int(em.get("id", 1)))
+            + _pb_float(2, float(em.get("x", 16.0)))
+            + _pb_float(3, float(em.get("y", 20.0)))
+            + _pb_int(4, int(em.get("dir", -1)))
+            + _pb_int(5, int(em.get("startSec", 0)))
+        )
+        map_msg += _pb_bytes(10, eb)
+
+    map_msg += _pb_bytes(11, _pb_header("item"))
+    map_msg += _pb_int(12, len(items))
+    for it in items:
+        ib = (
+            _pb_int(1, int(it.get("id", 1)))
+            + _pb_int(2, int(it.get("flag", 1)))
+            + _pb_int(3, int(it.get("min", 0)))
+            + _pb_int(4, int(it.get("max", 0)))
+            + _pb_float(5, float(it.get("x", 16.0)))
+            + _pb_float(6, float(it.get("y", 20.0)))
+        )
+        map_msg += _pb_bytes(13, ib)
+
+    map_msg += _pb_bytes(14, _pb_header("player"))
+    map_msg += _pb_int(15, len(players))
+    for pl in players:
+        pb = (
+            _pb_int(1, int(pl.get("id", 1)))
+            + _pb_float(2, float(pl.get("x", 5.0)))
+            + _pb_float(3, float(pl.get("y", 30.0)))
+            + _pb_int(4, int(pl.get("dir", 1)))
+        )
+        map_msg += _pb_bytes(16, pb)
+
+    map_msg += _pb_bytes(17, _pb_header("hole"))
+    map_msg += _pb_int(18, len(holes))
+    for hl in holes:
+        hb = (
+            _pb_int(1, int(hl.get("id", 1)))
+            + _pb_float(2, float(hl.get("x", 15.0)))
+            + _pb_float(3, float(hl.get("y", 1.0)))
+            + _pb_int(4, int(hl.get("flag", 1)))
+            + _pb_int(5, int(hl.get("size", 1)))
+            + _pb_int(6, int(hl.get("isHole", 1)))
+        )
+        map_msg += _pb_bytes(19, hb)
+
+    map_msg += _pb_bytes(20, _pb_header("bubble"))
+    map_msg += _pb_int(21, 0)
+    map_msg += _pb_bytes(26, _pb_header("bg"))
+    map_msg += _pb_int(27, 1)
+    map_msg += _pb_str(28, str(m.get("bg_name", "mp_0021_0")))
+    map_msg += _pb_bytes(29, _pb_header("filename"))
+    map_msg += _pb_str(30, str(m.get("name", "map_1")))
+    map_msg += _pb_bytes(31, _pb_header("hurryup"))
+    map_msg += _pb_int(32, int(m.get("hurry_up_time", 60)))
+    map_msg += _pb_bytes(33, _pb_header("bspeed"))
+    map_msg += _pb_float(34, float(m.get("bubble_speed_rate", 100.0)))
+    map_msg += _pb_bytes(35, _pb_header("bsec"))
+    map_msg += _pb_float(36, float(m.get("bubble_interval_sec", 1.0)))
+    map_msg += _pb_bytes(37, _pb_header("extend"))
+    map_msg += _pb_int(38, 0)
+    return bytes(map_msg)
+
+
+def build_episode_bin_from_stages(episode_bin_name: str, stages: list) -> bytes:
+    """Builds SerializeEpisodeData from a list of custom stage dicts loaded from JSON."""
+    dungeons_bytes = bytearray()
+    buttons_bytes = bytearray()
+    btn_coords = [
+        (-420.0, -140.0), (-320.0, 20.0), (-220.0, 140.0), (-110.0, -30.0), (0.0, -150.0),
+        (110.0, 30.0), (220.0, 150.0), (320.0, -20.0), (410.0, -130.0), (460.0, 80.0),
+    ]
+    for idx, st in enumerate(stages, 1):
+        maps = st.get("maps", []) or [{"name": f"stage_{idx}_m1", "tiles": [], "enemies": [{"id": 1, "x": 16, "y": 20, "dir": -1, "startSec": 0}]}]
+        d_msg = bytearray()
+        d_msg += _pb_bytes(1, _pb_header("dungeon"))
+        d_msg += _pb_bytes(2, _pb_header("map"))
+        d_msg += _pb_int(3, len(maps))
+        enemy_ids = set()
+        for m_idx, m in enumerate(maps):
+            m_copy = dict(m)
+            m_copy.setdefault("name", f"{episode_bin_name}_d{idx}_m{m_idx+1}")
+            d_msg += _pb_bytes(4, _build_map_data_from_dict(m_copy))
+            for em in m.get("enemies", []):
+                enemy_ids.add(int(em.get("id", 1)))
+        if not enemy_ids:
+            enemy_ids.add(1)
+        bonus_bytes = _build_map_data_from_dict(maps[0])
+        d_msg += _pb_bytes(7, _pb_header("bonus"))
+        d_msg += _pb_bytes(9, bonus_bytes)
+        d_msg += _pb_bytes(5, _pb_header("filename"))
+        d_msg += _pb_str(6, f"{episode_bin_name}_d{idx}")
+        d_msg += _pb_bytes(10, _pb_header("enemylist"))
+        d_msg += _pb_int(11, len(enemy_ids))
+        for eid in sorted(enemy_ids):
+            d_msg += _pb_int(12, eid)
+        d_msg += _pb_bytes(16, _pb_header("icon"))
+        d_msg += _pb_str(17, "0032")
+        d_msg += _pb_bytes(18, _pb_header("dtext"))
+        d_msg += _pb_str(19, str(st.get("name", f"Stage {idx}")))
+        dungeons_bytes += _pb_bytes(4, bytes(d_msg))
+
+        bx, by = btn_coords[(idx - 1) % len(btn_coords)]
+        bx = float(st.get("map_btn_x", bx))
+        by = float(st.get("map_btn_y", by))
+        btn_msg = _pb_int(1, idx) + _pb_float(2, bx) + _pb_float(3, by)
+        buttons_bytes += _pb_bytes(11, btn_msg)
+
+    ep_msg = bytearray()
+    ep_msg += _pb_bytes(1, _pb_header("episode", 1, 4, 1))
+    ep_msg += _pb_bytes(2, _pb_header("dungeon"))
+    ep_msg += _pb_int(3, len(stages))
+    ep_msg += dungeons_bytes
+    ep_msg += _pb_bytes(5, _pb_header("filename"))
+    ep_msg += _pb_str(6, episode_bin_name)
+    ep_msg += _pb_bytes(7, _pb_header("mapimg"))
+    ep_msg += _pb_str(8, "ep_map_01")
+    ep_msg += _pb_bytes(9, _pb_header("mapbtn"))
+    ep_msg += _pb_int(10, len(stages))
+    ep_msg += buttons_bytes
+    ep_msg += _pb_bytes(12, _pb_header("mapbg"))
+    ep_msg += _pb_str(13, "ep_bg_01")
+    return binary_converter_encrypt(bytes(ep_msg))
+
 def build_sample_map_png(width: int = 1280, height: int = 720) -> bytes:
     """Generates a valid 1280x720 RGB PNG with a sky-to-meadow gradient (zero dependencies)."""
     def chunk(tag: bytes, data: bytes) -> bytes:
@@ -563,8 +735,12 @@ def build_sample_map_png(width: int = 1280, height: int = 720) -> bytes:
 # ---------------------------------------------------------------------------
 
 class GameServerState:
-    def __init__(self, base_url: str, save_file: str = "bbfk_save.json"):
+    def __init__(self, base_url: str, save_file: str = "bbfk_save.json", levels_dir: str = "levels"):
         self.save_file = save_file
+        self.levels_dir = levels_dir
+        self.custom_stages = []
+        self.custom_episodes = []
+        self.episode_version = 5
         self.lock = threading.Lock()
         self.base_url = base_url.rstrip("/")
         self.user_id = 100001
@@ -633,7 +809,57 @@ class GameServerState:
             }
             for i in range(1, 11)
         ]
+        self._load_custom_levels()
         self._load_save()
+
+    def _load_custom_levels(self):
+        if not self.levels_dir or not os.path.isdir(self.levels_dir):
+            return
+        files = sorted(glob.glob(os.path.join(self.levels_dir, "*.json")))
+        if not files:
+            return
+        stages = []
+        max_mtime = 0
+        for fp in files:
+            try:
+                max_mtime = max(max_mtime, int(os.path.getmtime(fp)))
+                with open(fp, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    stages.extend(data)
+                elif isinstance(data, dict):
+                    stages.append(data)
+            except Exception as exc:
+                print(f"[LEVELS] Failed to load {fp}: {exc}")
+        if stages:
+            stages.sort(key=lambda s: int(s.get("stage_id", 999)))
+            self.custom_stages = stages
+            self.custom_episodes = []
+            for ep_idx in range(0, len(stages), 10):
+                ep_num = (ep_idx // 10) + 1
+                ep_bin_name = f"episode_{ep_num:03d}"
+                chunk = stages[ep_idx : ep_idx + 10]
+                self.episode_bins[f"{ep_bin_name}.bin"] = build_episode_bin_from_stages(ep_bin_name, chunk)
+                self.custom_episodes.append((ep_num, ep_bin_name, chunk))
+            self.episode_version = max(6, 6 + (max_mtime % 100000))
+            self.progress_episode = [
+                {"user_id": self.user_id, "mst_episode_id": ep_num, "is_unlock": 1, "clear_total": 0, "is_check_guide": 1}
+                for ep_num, _, _ in self.custom_episodes
+            ]
+            self.progress_dungeon = [
+                {
+                    "user_id": self.user_id,
+                    "mst_dungeon_id": i,
+                    "is_enable_play": 1 if i == 1 else 0,
+                    "is_clear": 0,
+                    "best_score": 0,
+                    "extend_bubble_list": "",
+                    "clear_rank": 0,
+                    "dungeon_date": "2026-11-20 00:00:00",
+                }
+                for i in range(1, len(stages) + 1)
+            ]
+            print(f"[LEVELS] Loaded {len(stages)} custom stage(s) from {self.levels_dir}/ (version={self.episode_version})")
 
     def _load_save(self):
         if not self.save_file or not os.path.exists(self.save_file):
@@ -780,11 +1006,26 @@ class GameServerState:
                             "lang_name": "Tutorial",
                             "is_event": 0,
                             "episode_bin": "episode_tutorial",
-                            "version": 5,
+                            "version": self.episode_version,
                             "weight_exp": 1.0,
                             "start_date": "2020-01-01 00:00:00",
                             "end_date": "2099-12-31 23:59:59",
                         },
+                    ] + ([
+                        {
+                            "mst_episode_id": ep_num,
+                            "unlock_gold": 0,
+                            "unlock_friend_point": 0,
+                            "lang_name": f"Episode {ep_num}",
+                            "is_event": 0,
+                            "episode_bin": ep_bin_name,
+                            "version": self.episode_version,
+                            "weight_exp": 1.0,
+                            "start_date": "2020-01-01 00:00:00",
+                            "end_date": "2099-12-31 23:59:59",
+                        }
+                        for ep_num, ep_bin_name, _ in self.custom_episodes
+                    ] if self.custom_episodes else [
                         {
                             "mst_episode_id": 1,
                             "unlock_gold": 0,
@@ -792,14 +1033,30 @@ class GameServerState:
                             "lang_name": "Episode 1",
                             "is_event": 0,
                             "episode_bin": "episode_001",
-                            "version": 5,
+                            "version": self.episode_version,
                             "weight_exp": 1.0,
                             "start_date": "2020-01-01 00:00:00",
                             "end_date": "2099-12-31 23:59:59",
                         },
-                    ],
+                    ]),
                     "dungeon_list": [
                         {"mst_dungeon_id": -1, "mst_episode_id": -1, "play_order": 1, "lang_name": "Tutorial", "goal_score_1": 1000, "goal_score_2": 2000, "goal_score_3": 3000, "bonus_coin_rate": 100, "unlock_gold": 0, "unlock_friend_point": 0, "lang_description": "Tutorial"},
+                    ] + ([
+                        {
+                            "mst_dungeon_id": idx,
+                            "mst_episode_id": ((idx - 1) // 10) + 1,
+                            "play_order": ((idx - 1) % 10) + 1,
+                            "lang_name": str(st.get("name", f"Stage 1-{idx}")),
+                            "goal_score_1": int(st.get("goal_score_1", 1000)),
+                            "goal_score_2": int(st.get("goal_score_2", 3000)),
+                            "goal_score_3": int(st.get("goal_score_3", 5000)),
+                            "bonus_coin_rate": int(st.get("bonus_coin_rate", 100)),
+                            "unlock_gold": 0,
+                            "unlock_friend_point": 0,
+                            "lang_description": str(st.get("description", f"Stage 1-{idx}")),
+                        }
+                        for idx, st in enumerate(self.custom_stages, 1)
+                    ] if self.custom_stages else [
                         {"mst_dungeon_id": 1, "mst_episode_id": 1, "play_order": 1, "lang_name": "Stage 1-1", "goal_score_1": 1000, "goal_score_2": 2000, "goal_score_3": 3000, "bonus_coin_rate": 100, "unlock_gold": 0, "unlock_friend_point": 0, "lang_description": "Stage 1-1"},
                         {"mst_dungeon_id": 2, "mst_episode_id": 1, "play_order": 2, "lang_name": "Stage 1-2", "goal_score_1": 1500, "goal_score_2": 3000, "goal_score_3": 4500, "bonus_coin_rate": 100, "unlock_gold": 0, "unlock_friend_point": 0, "lang_description": "Stage 1-2"},
                         {"mst_dungeon_id": 3, "mst_episode_id": 1, "play_order": 3, "lang_name": "Stage 1-3", "goal_score_1": 2000, "goal_score_2": 4000, "goal_score_3": 6000, "bonus_coin_rate": 100, "unlock_gold": 0, "unlock_friend_point": 0, "lang_description": "Stage 1-3"},
@@ -810,7 +1067,7 @@ class GameServerState:
                         {"mst_dungeon_id": 8, "mst_episode_id": 1, "play_order": 8, "lang_name": "Stage 1-8", "goal_score_1": 4500, "goal_score_2": 9000, "goal_score_3": 13500, "bonus_coin_rate": 100, "unlock_gold": 0, "unlock_friend_point": 0, "lang_description": "Stage 1-8"},
                         {"mst_dungeon_id": 9, "mst_episode_id": 1, "play_order": 9, "lang_name": "Stage 1-9", "goal_score_1": 5000, "goal_score_2": 10000, "goal_score_3": 15000, "bonus_coin_rate": 100, "unlock_gold": 0, "unlock_friend_point": 0, "lang_description": "Stage 1-9"},
                         {"mst_dungeon_id": 10, "mst_episode_id": 1, "play_order": 10, "lang_name": "Stage 1-10", "goal_score_1": 6000, "goal_score_2": 12000, "goal_score_3": 18000, "bonus_coin_rate": 100, "unlock_gold": 0, "unlock_friend_point": 0, "lang_description": "Stage 1-10"},
-                    ],
+                    ]),
                     "weekly_reward": [],
                 }
 
@@ -1300,10 +1557,11 @@ def main():
     parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
     parser.add_argument("--port", type=int, default=8080, help="Port to listen on (default: 8080)")
     parser.add_argument("--public-host", default=None, help="Public URL base for resources_host (e.g. http://192.168.1.10:8080)")
+    parser.add_argument("--levels-dir", default="levels", help="Directory of custom stage JSON files (default: levels)")
     args = parser.parse_args()
 
     public_url = args.public_host or f"http://127.0.0.1:{args.port}"
-    state = GameServerState(public_url)
+    state = GameServerState(public_url, levels_dir=args.levels_dir)
     server = ThreadingHTTPServer((args.host, args.port), make_handler(state))
     print(f"BBFK Fake Server listening on http://{args.host}:{args.port} (resources_host={public_url}/resource/)")
     try:
