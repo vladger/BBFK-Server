@@ -1,3 +1,4 @@
+### Note: this project was made by Gemini AI (Hydrogen).
 # Bubble Bobble for Kakao — Custom Preservation Server & Toolkit
 
 A zero-dependency Python 3 preservation server, automatic APK patcher, and GUI level editor for the shut-down Unity mobile game **Bubble Bobble for Kakao** (`버블보블 for Kakao`), reverse-engineered from its decompiled client source.
